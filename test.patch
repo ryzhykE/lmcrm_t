@@ -1,0 +1,296 @@
+Index: app/Http/Controllers/Frontend/InfoController.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- app/Http/Controllers/Frontend/InfoController.php	(date 1571168354023)
++++ app/Http/Controllers/Frontend/InfoController.php	(date 1571168354023)
+@@ -0,0 +1,67 @@
++<?php
++
++namespace App\Http\Controllers\Frontend;
++
++use App\Http\Controllers\Controller;
++use App\Http\Requests\InformationRequest;
++use App\Models\Lead;
++use App\Models\SphereMask;
++use Sentinel;
++
++class InfoController extends Controller
++{
++    public $id;
++
++    /**
++     * InfoController constructor.
++     */
++    public function __construct()
++    {
++
++        $this->id = Sentinel::getUser()->id;
++    }
++
++    /**
++     * @return \Illuminate\Contracts\View\Factory|\Illuminate\View\View
++     */
++    public function index()
++    {
++
++        $informations = Lead::with('phone')
++            ->whereHas('obtainedBy', function ($query) {
++               $query->where('agent_id', $this->id);
++            })
++            ->get();
++
++        return view('views.page.info', compact('informations'));
++    }
++
++    /**
++     * @param InformationRequest $request
++     * @return \Illuminate\Contracts\View\Factory|\Illuminate\View\View
++     */
++    public function details(InformationRequest $request)
++    {
++        $sphereMask = new SphereMask(1, $this->id);
++        $key = array_keys($sphereMask->findShortMask());
++
++        $leadInfo = Lead::with([
++            'phone',
++            'sphereAttributes' => function($query) use ($key) {
++                $query->whereHas('options', function ($query) use ($key) {
++                        $query->select('value')
++                            ->whereIn('id', $key)
++                            ->orderBy('id');
++                    });
++                }
++            ])
++            ->whereHas('obtainedBy', function ($query) {
++                $query->where('agent_id', $this->id);
++            })
++            ->findOrFail($request->id);
++
++        return view('views.page.detail', compact('leadInfo'));
++    }
++
++
++}
+Index: app/Http/Requests/InformationRequest.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- app/Http/Requests/InformationRequest.php	(date 1570908643104)
++++ app/Http/Requests/InformationRequest.php	(date 1570908643104)
+@@ -0,0 +1,27 @@
++<?php
++
++namespace App\Http\Requests;
++
++class InformationRequest extends Request
++{
++    /**
++     * @return bool
++     */
++    public function authorize()
++    {
++        return true;
++    }
++
++    /**
++     * Get the validation rules that apply to the request.
++     *
++     * @return array
++     */
++    public function rules()
++    {
++        return [
++            'id' => 'required|numeric',
++        ];
++    }
++
++}
+Index: app/Http/routes/front.routes.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- app/Http/routes/front.routes.php	(revision 0bc0138304b8b8d4d9da0913c86fd4770a17a8d4)
++++ app/Http/routes/front.routes.php	(date 1570907583838)
+@@ -12,6 +12,11 @@
+ Route::any('/auth/destroy', ['as' => 'auth.destroy', 'uses' => 'Auth\SessionsController@destroy']);
+ //Route::resource('/auth', 'Auth\SessionsController', ['only' => ['create', 'store', 'destroy']]);
+ 
++Route::group(['namespace' => 'Frontend', 'middleware' => ['auth', 'agent|salesman'] ], function() {
++    Route::get('info', 'InfoController@index')->name('info');
++    Route::post('info/details', 'InfoController@details')->name('details');
++});
++
+ # Registration
+ /*
+ Route::group(['middleware' => 'guest'], function () {
+Index: app/Models/Lead.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- app/Models/Lead.php	(revision 0bc0138304b8b8d4d9da0913c86fd4770a17a8d4)
++++ app/Models/Lead.php	(date 1571168147500)
+@@ -25,6 +25,8 @@
+         'agent_id','sphere_id','name', 'customer_id', 'comment', 'date', 'bad'
+     ];
+ 
++    protected $dates = ['date'];
++
+     /**
+      * The attributes that should be hidden for arrays.
+      *
+@@ -50,4 +52,12 @@
+         $relation=$this->belongsToMany('App\Models\Agent','open_leads','lead_id','agent_id');
+         return ($agent_id)? $relation->where('agent_id','=',$agent_id) : $relation;
+     }
++
++    /**
++     * @return \Illuminate\Database\Eloquent\Relations\HasMany
++     */
++    public function sphereAttributes()
++    {
++        return $this->hasMany(SphereAttr::class, 'sphere_id', 'sphere_id');
++    }
+ }
+Index: app/Models/SphereMask.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- app/Models/SphereMask.php	(revision 0bc0138304b8b8d4d9da0913c86fd4770a17a8d4)
++++ app/Models/SphereMask.php	(date 1571167600779)
+@@ -67,7 +67,7 @@
+ 
+     public function findMask($user_id=NULL){
+         $user_id = ($user_id)?$user_id:$this->userID;
+-        return $this->tableDB->where('user_id','=',$user_id);
++        return $this->tableDB->where('user_id','=',$user_id)->where('type', 'lead');
+     }
+     
+     public function setType($val='agent',$user_id=NULL){
+Index: resources/views/views/page/detail.blade.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- resources/views/views/page/detail.blade.php	(date 1571168306394)
++++ resources/views/views/page/detail.blade.php	(date 1571168306394)
+@@ -0,0 +1,30 @@
++@extends('layouts.master')
++
++@section('content')
++<table class="table-striped table-hover" style="width: 100%">
++    <tbody>
++    <tr>
++        <td>icon</td>
++        <td>{{ $leadInfo->icon ? $leadInfo->icon : '' }}</td>
++    </tr>
++    <tr>
++        <td>date</td>
++        <td>{{ $leadInfo->date->format('d.m.Y') }}</td>
++    </tr>
++    <tr>
++        <td>name</td>
++        <td>{{ $leadInfo->name}}</td>
++    </tr>
++    @foreach($leadInfo->sphereAttributes as $attribute)
++        <tr>
++            <td>{{ $attribute->label }}</td>
++            <td>
++            @foreach($attribute->options as $option)
++                {{ $option->value}}
++            @endforeach
++            </td>
++        </tr>
++    @endforeach
++    </tbody>
++</table>
++@stop
+\ No newline at end of file
+Index: resources/views/views/page/info.blade.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- resources/views/views/page/info.blade.php	(date 1571168306422)
++++ resources/views/views/page/info.blade.php	(date 1571168306422)
+@@ -0,0 +1,74 @@
++@extends('layouts.master')
++
++@section('content')
++    <!-- Page Content -->
++    <div class="container">
++        <div class="row">
++            <div class="col-lg-12">
++                <h1 class="page-header">Info</h1>
++            </div>
++            <!-- /.col-lg-12 -->
++        </div>
++        <!-- /.row -->
++    </div>
++    <!-- /.container-fluid -->
++
++    <div class="table-responsive">
++        <table class="table table-striped table-bordered table-hover">
++            <thead>
++            <tr>
++                <th>Icon</th>
++                <th>Date</th>
++                <th>Name</th>
++                <th>Phone</th>
++                <th>Email</th>
++            </tr>
++            </thead>
++            <tbody>
++            @foreach($informations as $information)
++            <tr class="detail-info" data-id="{{ $information->id }}" data-action="{{ route('details') }}">
++                <td>{{ $information->icon ? $leadInfo->icon : '' }}</td>
++                <td>{{ $information->date->format('d.m.Y') }}</td>
++                <td>{{ $information->name }}</td>
++                <td>{{ $information->phone ? $information->phone->phone : '' }}</td>
++                <td>{{ $information->email }}</td>
++            </tr>
++            <tr id="single-{{$information->id}}" style="display: none;" >
++                <td colspan="4"></td>
++            </tr>
++           @endforeach
++            </tbody>
++        </table>
++    </div>
++
++    <script>
++        $(document).ready(function() {
++            $('.detail-info').click(function () {
++                var $this = $(this)
++                var id = $this.data('id');
++                var single = $('#single-'+id);
++                $.ajax({
++                    headers: {
++                        'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
++                    },
++                    type: "POST",
++                    dataType: 'html',
++                    url: $this.data('action'),
++                    data: {'id':id},
++                    success: function (data) {
++                        if(single.hasClass('expand')) {
++                            single.fadeOut().removeClass('expand');
++                        }else {
++                            single.fadeIn().addClass('expand')
++                                .find('td').html(data);
++                        }
++                    },
++                    error: function (XMLHttpRequest, textStatus) {
++                        alert(textStatus);
++                    },
++                });
++
++            })
++        });
++    </script>
++@endsection
+\ No newline at end of file
